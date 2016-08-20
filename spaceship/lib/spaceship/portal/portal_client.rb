@@ -125,6 +125,8 @@ module Spaceship
     end
 
     def update_service_for_app(app, service)
+      ensure_csrf
+
       request(:post, service.service_uri, {
         teamId: team_id,
         displayId: app.app_id,
@@ -136,6 +138,8 @@ module Spaceship
     end
 
     def associate_groups_with_app(app, groups)
+      ensure_csrf
+
       request(:post, 'account/ios/identifiers/assignApplicationGroupToAppId.action', {
         teamId: team_id,
         appIdId: app.app_id,
@@ -151,8 +155,7 @@ module Spaceship
                      when :explicit
                        {
                          type: 'explicit',
-                         explicitIdentifier: bundle_id,
-                         appIdentifierString: bundle_id,
+                         identifier: bundle_id,
                          push: 'on',
                          inAppPurchase: 'on',
                          gameCenter: 'on'
@@ -160,20 +163,18 @@ module Spaceship
                      when :wildcard
                        {
                          type: 'wildcard',
-                         wildcardIdentifier: bundle_id,
-                         appIdentifierString: bundle_id
+                         identifier: bundle_id
                        }
                      end
 
       params = {
-        appIdName: name,
+        name: name,
         teamId: team_id
       }
 
       params.merge!(ident_params)
 
       ensure_csrf
-
       r = request(:post, "account/#{platform_slug(mac)}/identifiers/addAppId.action", params)
       parse_response(r, 'appId')
     end
@@ -249,6 +250,8 @@ module Spaceship
     end
 
     def create_device!(device_name, device_id, mac: false)
+      ensure_csrf
+
       req = request(:post) do |r|
         r.url "https://developerservices2.apple.com/services/#{PROTOCOL_VERSION}/#{platform_slug(mac)}/addDevice.action"
         r.params = {
@@ -373,6 +376,8 @@ module Spaceship
     end
 
     def repair_provisioning_profile!(profile_id, name, distribution_method, app_id, certificate_ids, device_ids, mac: false)
+      ensure_csrf
+
       r = request(:post, "account/#{platform_slug(mac)}/profile/regenProvisioningProfile.action", {
         teamId: team_id,
         provisioningProfileId: profile_id,
@@ -389,11 +394,21 @@ module Spaceship
     private
 
     def ensure_csrf
-      if csrf_tokens.count == 0
-        # If we directly create a new resource (e.g. app) without querying anything before
-        # we don't have a valid csrf token, that's why we have to do at least one request
-        apps
-      end
+      # It's important we store this state here
+      # as we always want to request something at least once
+      return unless @requested_csrf_token.nil?
+
+      # If we directly create a new resource (e.g. app) without querying anything before
+      # we don't have a valid csrf token, that's why we have to do at least one request
+      Certificate::Production.all
+
+      # Update 18th August 2016
+      # For some reason, we have to query the resource twice to actually get a valid csrf_token
+      # I couldn't find out why, the first response does have a valid Set-Cookie header
+      # But it still needs this second request
+      Certificate::Production.all
+
+      @requested_csrf_token = true if csrf_tokens.count > 0
     end
   end
 end
